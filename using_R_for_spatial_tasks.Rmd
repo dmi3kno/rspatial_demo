@@ -14,9 +14,9 @@ However you may still find yourself feeling you are "starting from scratch". The
 > NB! Google allows only 2500 requests per day through their API free of charge
 
 ```{r}
-library(tidyverse)
 library(ggmap)
-statoil_locations <- c("statoil fornebu", "statoil forus", "statoil stjørdal", "statoil harstad", "statoil tjelberdoggen", "statoil mongstad", "statoil kårstø", "statoil melkøya") 
+library(dplyr)
+statoil_locations <- c("statoil fornebu", "statoil forus", "statoil kontor stjoerdal", "statoil harstad", "statoil tjeldbergodden", "statoil mongstad", "statoil kaarstoe", "statoil melkoeya") 
 
 stl_loc_df <- statoil_locations %>% 
   geocode() %>% bind_cols(location=statoil_locations)
@@ -68,10 +68,12 @@ stl_loc_geo <- stl_loc_df %>% st_as_sf(coords=c("lon", "lat"), crs=4326)
 stl_loc_geo
 
 norway_fylke_geo <- norway_fylke %>% st_as_sf(crs=4326)
-norway_fylke_geo
 
 stl_loc_geo %>% 
-  st_join(norway_fylke_geo, join=st_within)
+  st_join(norway_fylke_geo, join=st_within) %>% 
+  as_tibble() %>% 
+  dplyr::select(location, NAME_1)
+
 ```
 
 What if we want to take geo data from the user, say I want to mark up my favorite hiking areas? (or indicate boundaries of a new prospect or a prospective area to be allocated in the new licensing round).
@@ -90,7 +92,6 @@ hiking_areas_geo <- hiking_areas$finished
 Ok. Where are those located? Or rather, give me the list of hikeable fylkes (fylke that contain my hiking spots). Note that I marked the areas without looking at the fylke borders so I am interested in a generic join of polygons that may be intersecting.
 
 ```{r}
-library(dplyr)
 hiking_areas_geo %>% 
   st_join(norway_fylke_geo) %>% 
   as_tibble() %>% 
@@ -106,11 +107,24 @@ fishing_area_and_house <- norway_fylke_geo %>%
   mapview() %>% 
   editMap()
 
+fishing_area_and_house$finished
+
 cent <- fishing_area_and_house$finished %>% 
   filter(feature_type=="polygon") %>% 
   st_centroid() %>% 
   st_coordinates() 
 
+home <- fishing_area_and_house$finished %>% 
+  filter(feature_type=="marker") %>% 
+  st_coordinates()
+
+
+```
+
+so what was the waterdepth in the area we were fishing (using centroid location)? How far was it from shore? What does the seabed look like?
+First, we fetch bathymetry data from free online service to explore seabed in this location
+
+```{r}
 # install.packages("marmap")
 library(marmap)
 library(purrr)
@@ -123,15 +137,26 @@ fishing_region <- fishing_area_and_house$finished %>%
 
 bathy_matrix<-invoke(getNOAA.bathy, fishing_region)
 
-autoplot.bathy(bathy_matrix,geom=c("r", "c")) + 
-  scale_fill_etopo()
+# water depth
+w_depth <- get.depth(bathy_matrix, cent, locator = FALSE)$depth
+
+plot(bathy_matrix, image=TRUE, lwd = 0.1, main="my fishing spot")
+points(cent, pch=19, col="red")
+text(cent, paste("\nDepth:", w_depth, "m"), col = "white", font = 3)
+points(home, pch=19, col="green")
+text(home, "\nHome", col = "green", font = 3)
+
+fishing_area_and_house$finished %>%
+  filter(feature_type=="polygon") %>% 
+  st_geometry() %>% as_Spatial() %>% 
+  plot(add=TRUE, border="yellow")
+
+
 ```
 
-so what was the waterdepth in the area we were fishing (using centroid location)? How far was it from shore? What does the seabed look like?
+
 
 ```{r}
-# water depth
-get.depth(bathy_matrix, cent, locator = FALSE)
 
 # distance to shore
 dist_to_shore <- dist2isobath(bathy_matrix, x=rbind(cent, cent), isobath = 0)[1,]
@@ -139,15 +164,15 @@ dist_to_shore
 
 # what is the seabed like from shore to where we were fishing?
 get.transect(mat = bathy_matrix, 
-             x1 = dist_to_shore$start.lon, 
-             y1 = dist_to_shore$start.lat, 
-             x2 = dist_to_shore$end.lon, 
-             y2 = dist_to_shore$end.lat, 
+             x2= dist_to_shore$start.lon, 
+             y2 = dist_to_shore$start.lat, 
+             x1 = dist_to_shore$end.lon, 
+             y1 = dist_to_shore$end.lat, 
              distance = TRUE) %>% 
   plotProfile()
 
 # get a closer look at the seabed
 library(lattice)
-wireframe(unclass(bathy_matrix), shade=TRUE)
+wireframe(unclass(bathy_matrix), shade=TRUE, aspect = c(1, 0.5))
 ```
 

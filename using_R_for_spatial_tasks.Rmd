@@ -1,0 +1,153 @@
+---
+title: "R-Spatial Notebook"
+output: html_notebook
+---
+
+## Spatial data everywhere!
+
+### Adding geo dimension
+
+Geographical data is everywhere. In Statoil we use maps to keep track of the licenses, well/installation locations, we use maps to outline the prospects and plan oil/gas pipelines. Our internal ArcGIS database contains a lot of spatial data produced internally (shapefiles for basins, licenses, prospects/fields), as well as procured from external sources (IHS, Tellus, NPD, etc).
+
+However you may still find yourself feeling you are "starting from scratch". The truth is, you probably have geo data even if you don't have column for longitude and latitude. These days, google knows everything, and if google knows it, you probably have coordinates. 
+
+> NB! Google allows only 2500 requests per day through their API free of charge
+
+```{r}
+library(tidyverse)
+library(ggmap)
+statoil_locations <- c("statoil fornebu", "statoil forus", "statoil stjørdal", "statoil harstad", "statoil tjelberdoggen", "statoil mongstad", "statoil kårstø", "statoil melkøya") 
+
+stl_loc_df <- statoil_locations %>% 
+  geocode() %>% bind_cols(location=statoil_locations)
+
+stl_loc_df
+
+```
+
+Let's see if we can plot these:
+
+```{r}
+library(leaflet)
+
+p <- leaflet(stl_loc_df) %>% 
+  addTiles() %>% 
+  addMarkers(popup = ~location) 
+
+p
+```
+
+Not bad! Lets see if we can get some shapefiles to play with:
+
+```{r}
+library(raster)
+
+norway_fylke <- getData('GADM',
+  country = 'NO', 
+  level = 1) 
+
+p %>% 
+  addPolygons(data = norway_fylke)
+
+```
+
+Of course you can read shapefiles (e.g. Statoil/Tellus basin outlines) and data frames with pre-populated coordinates (e.g. well locations in Woodmac Upstream Data Tool).
+
+### Manipulating spatial data
+
+Now that we have spatial data, how do we manipulate it? For example, how do we find out, in which fylke is each of our offices located? 
+
+First we will need to transform our data into the "tidy" format (encode geo-data as as simple feature and include it into the "rectangular" dataframe as special "geometry" column). Once the data is in the "tidy" format, we can easily make "spatial join" using familiar "tidyverse" tools.
+
+> Please, review awesome vignettes to `sf` package
+
+```{r}
+library(sf)
+
+stl_loc_geo <- stl_loc_df %>% st_as_sf(coords=c("lon", "lat"), crs=4326)
+stl_loc_geo
+
+norway_fylke_geo <- norway_fylke %>% st_as_sf(crs=4326)
+norway_fylke_geo
+
+stl_loc_geo %>% 
+  st_join(norway_fylke_geo, join=st_within)
+```
+
+What if we want to take geo data from the user, say I want to mark up my favorite hiking areas? (or indicate boundaries of a new prospect or a prospective area to be allocated in the new licensing round).
+
+```{r}
+#install.packages("mapedit")
+library(mapedit)
+library(mapview)
+
+hiking_areas <- mapview() %>% editMap()
+
+hiking_areas_geo <- hiking_areas$finished
+
+```
+
+Ok. Where are those located? Or rather, give me the list of hikeable fylkes (fylke that contain my hiking spots). Note that I marked the areas without looking at the fylke borders so I am interested in a generic join of polygons that may be intersecting.
+
+```{r}
+library(dplyr)
+hiking_areas_geo %>% 
+  st_join(norway_fylke_geo) %>% 
+  as_tibble() %>% 
+  dplyr::select(NAME_1) %>% 
+  distinct
+```
+
+Finally, last summer, my friend Adrian took me fishing outside of Linnesøya in Trøndelag. We had fancy fishing equipment and a sonar device in the boat, so we were able to get a lot of fish, but I always wondered how deep was the water in that area and whether I could go with my regual fishing rod to catch that steinbit that cut off my lure.
+
+```{r}
+fishing_area_and_house <- norway_fylke_geo %>% 
+  filter(NAME_1=="Sør-Trøndelag") %>% 
+  mapview() %>% 
+  editMap()
+
+cent <- fishing_area_and_house$finished %>% 
+  filter(feature_type=="polygon") %>% 
+  st_centroid() %>% 
+  st_coordinates() 
+
+# install.packages("marmap")
+library(marmap)
+library(purrr)
+
+fishing_region <- fishing_area_and_house$finished %>% 
+  st_bbox() %>% 
+  setNames(c("lon1", "lat1", "lon2", "lat2")) %>% 
+  c(resolution=1) %>% 
+  as.list()
+
+bathy_matrix<-invoke(getNOAA.bathy, fishing_region)
+
+autoplot.bathy(bathy_matrix,geom=c("r", "c")) + 
+  scale_fill_etopo()
+```
+
+so what was the waterdepth in the area we were fishing (using centroid location)? How far was it from shore? What does the seabed look like?
+
+```{r}
+# water depth
+get.depth(bathy_matrix, cent, locator = FALSE)
+
+# distance to shore
+dist_to_shore <- dist2isobath(bathy_matrix, x=rbind(cent, cent), isobath = 0)[1,]
+dist_to_shore
+
+# what is the seabed like from shore to where we were fishing?
+get.transect(mat = bathy_matrix, 
+             x1 = dist_to_shore$start.lon, 
+             y1 = dist_to_shore$start.lat, 
+             x2 = dist_to_shore$end.lon, 
+             y2 = dist_to_shore$end.lat, 
+             distance = TRUE) %>% 
+  plotProfile()
+
+# get a closer look at the seabed
+library(lattice)
+wireframe(unclass(bathy_matrix), shade=TRUE)
+```
+

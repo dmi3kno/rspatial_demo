@@ -64,7 +64,7 @@ First we will need to transform our data into the "tidy" format (encode geo-data
 ```{r}
 library(sf)
 
-stl_loc_geo <- stl_loc_df %>% st_as_sf(coords=c("lon", "lat"), crs=4326)
+stl_loc_geo <- stl_loc_df %>% na.omit() %>% st_as_sf(coords=c("lon", "lat"), crs=4326)
 stl_loc_geo
 
 norway_fylke_geo <- norway_fylke %>% st_as_sf(crs=4326)
